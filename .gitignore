@@ -1,0 +1,109 @@
+# ============================================
+# PYTHON & VIRTUAL ENVIRONMENTS
+# ============================================
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg
+*.egg-info/
+dist/
+build/
+develop-eggs/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+pip-wheel-metadata/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+
+# Virtual Environments
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+.venv
+
+# ============================================
+# IDE & EDITOR
+# ============================================
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+*.sublime-project
+*.sublime-workspace
+
+# ============================================
+# JUPYTER & NOTEBOOKS
+# ============================================
+.ipynb_checkpoints
+*.ipynb_checkpoints
+
+# ============================================
+# DATA FILES (CRITICAL - LARGE FILES)
+# ============================================
+# Exclude all data directories
+data/
+!data/.gitkeep
+
+# Exclude compressed files
+*.zip
+*.tar
+*.tar.gz
+*.rar
+*.7z
+
+# Exclude data formats
+*.parquet
+*.csv
+*.tsv
+*.xlsx
+*.xls
+*.json
+*.ndjson
+
+# ============================================
+# ENVIRONMENT & CONFIG
+# ============================================
+.env
+.env.local
+.env.*.local
+*.config
+
+# ============================================
+# OS FILES
+# ============================================
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+desktop.ini
+
+# ============================================
+# PROJECT SPECIFIC
+# ============================================
+*.log
+*.pot
+*.mo
+.coverage
+htmlcov/
+.pytest_cache/
+.mypy_cache/
+.tox/
+node_modules/
