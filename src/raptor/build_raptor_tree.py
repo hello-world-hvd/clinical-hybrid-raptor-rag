@@ -21,7 +21,7 @@ from tqdm import tqdm
 import umap
 
 
-DEFAULT_INPUT = Path("data/processed/preprocess_full_no_assets")
+DEFAULT_INPUT = Path("data/processed/preprocess_output")
 DEFAULT_OUTPUT = Path("data/processed/raptor_tree")
 DEFAULT_EMBED_MODEL = "BAAI/bge-m3"
 MODAL_APP_NAME = "raptor-qwen25-summarizer"

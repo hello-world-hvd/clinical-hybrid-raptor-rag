@@ -95,3 +95,8 @@ This avoids paying model startup cost on every query.
 The indexer repairs common PDF mojibake before tokenization/embedding, keeps all RAPTOR
 nodes in both indexes, and writes citation metadata from each node into
 `data/processed/raptor_index/nodes.jsonl`.
+
+python -m src.test_demo `  "triệu chứng ngộ độc thuốc chuột Fluoroacetat"`
+--index data\processed\raptor_index `  --rerank-preset fast`
+--rerank-top-k 8 `  --rerank-batch-size 16`
+--rerank-max-length 256

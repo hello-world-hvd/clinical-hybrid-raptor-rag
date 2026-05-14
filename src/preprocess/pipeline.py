@@ -303,6 +303,41 @@ def render_clip(page: fitz.Page, bbox: BBox, output_path: Path, *, dpi: int = 14
     return output_path.as_posix()
 
 
+def remove_page_footer(text: str) -> str:
+    """Remove page number footers from text block.
+    
+    Detects patterns like standalone page numbers at bottom of pages:
+    - Single digits: 1, 2, 9
+    - Multi-digit: 123, 456
+    - With separators: 1/, /1/, -1-, etc.
+    """
+    if not text:
+        return text
+    
+    lines = text.split("\n")
+    filtered_lines = []
+    
+    for line in lines:
+        clean_line = line.strip()
+        if not clean_line:
+            filtered_lines.append(line)
+            continue
+        
+        if re.fullmatch(r"^\d+$", clean_line) and len(clean_line) <= 3:
+            continue
+        
+        if re.fullmatch(r"^[\-/]?\d+[\-/]?$", clean_line):
+            continue
+        
+        if re.fullmatch(r"^page\s*\d+$", clean_line, flags=re.IGNORECASE):
+            continue
+        
+        filtered_lines.append(line)
+    
+    result = "\n".join(filtered_lines)
+    return normalize_text(result, preserve_lines=True)
+
+
 def extract_text_blocks(page: fitz.Page) -> List[Dict[str, Any]]:
     blocks: List[Dict[str, Any]] = []
     page_dict = page.get_text("dict", sort=True)
@@ -328,6 +363,7 @@ def extract_text_blocks(page: fitz.Page) -> List[Dict[str, Any]]:
                     sizes.append(float(size))
 
         text = normalize_text("\n".join(lines), preserve_lines=True)
+        text = remove_page_footer(text)
         if not text:
             continue
         bbox = tuple(float(v) for v in block.get("bbox", (0, 0, 0, 0)))  # type: ignore[assignment]
@@ -489,6 +525,85 @@ def split_section_text_into_units(text: str, max_chars: int) -> List[str]:
     return units
 
 
+def last_n_words(text: str, word_count: int) -> str:
+    """Extract last N words from text for overlap context."""
+    if word_count <= 0:
+        return ""
+    words = WORD_RE.findall(text)
+    if not words:
+        return ""
+    return " ".join(words[-word_count:])
+
+
+def merge_short_chunks(chunks: List[Dict[str, Any]], min_chars: int = 150) -> List[Dict[str, Any]]:
+    """Merge chunks shorter than min_chars with adjacent chunks.
+    
+    Enforces minimum chunk size while preserving all content. Short chunks
+    are merged forward into the next chunk to maintain reading order.
+    """
+    if not chunks or min_chars <= 0:
+        return chunks
+    
+    merged = []
+    i = 0
+    while i < len(chunks):
+        chunk = chunks[i].copy()
+        content = chunk.get("content", "")
+        
+        if len(content) < min_chars and i < len(chunks) - 1:
+            next_chunk = chunks[i + 1].copy()
+            next_content = next_chunk.get("content", "")
+            chunk["content"] = f"{content}\n\n{next_content}"
+            chunk["paragraph_index"] = next_chunk.get("paragraph_index", i + 1)
+            merged.append(chunk)
+            i += 2
+        else:
+            merged.append(chunk)
+            i += 1
+    
+    return merged
+
+
+def split_section_into_chunks_with_overlap(
+    text: str,
+    max_chars: int = 1400,
+    overlap_words: int = 50,
+) -> List[str]:
+    """Split section text into chunks with overlap between them.
+    
+    Args:
+        text: Section text to split
+        max_chars: Maximum characters per chunk
+        overlap_words: Number of words to overlap between chunks
+    
+    Returns:
+        List of chunks with overlap context at the beginning of each
+    """
+    if len(text) <= max_chars:
+        return [text]
+    
+    units = split_section_text_into_units(text, max_chars)
+    if not units:
+        return []
+    
+    if len(units) <= 1:
+        return units
+    
+    chunks = []
+    for i, unit in enumerate(units):
+        if i == 0:
+            chunks.append(unit)
+        else:
+            overlap_text = last_n_words(chunks[i - 1], overlap_words)
+            if overlap_text:
+                chunk_with_overlap = f"{overlap_text}\n\n{unit}"
+            else:
+                chunk_with_overlap = unit
+            chunks.append(chunk_with_overlap)
+    
+    return chunks
+
+
 def split_text_blocks_into_semantic_chunks(
     blocks: Sequence[Dict[str, Any]],
     *,
@@ -542,9 +657,18 @@ def split_text_blocks_into_semantic_chunks(
     for section in sections:
         headings = section["headings"]
         heading_context = " > ".join(headings)
-        for paragraph_index, unit in enumerate(split_section_text_into_units(section["text"], max_chars), start=1):
+        section_text = section["text"]
+        min_chunk_size = 150
+        
+        if len(section_text) > 1500:
+            chunk_texts = split_section_into_chunks_with_overlap(section_text, max_chars=max_chars, overlap_words=50)
+        else:
+            chunk_texts = [section_text]
+        
+        section_chunks = []
+        for paragraph_index, unit in enumerate(chunk_texts, start=1):
             content = f"{heading_context}\n\n{unit}" if heading_context else unit
-            chunks.append(
+            section_chunks.append(
                 {
                     "content": content,
                     "headings": headings,
@@ -553,12 +677,15 @@ def split_text_blocks_into_semantic_chunks(
                     "semantic_type": semantic_bucket_for_text(unit, headings),
                 }
             )
+        
+        section_chunks = merge_short_chunks(section_chunks, min_chars=min_chunk_size)
+        chunks.extend(section_chunks)
 
     if chunks:
         return chunks
 
     fallback_text = page_text_from_blocks(blocks)
-    return [
+    fallback_chunks = [
         {
             "content": chunk,
             "headings": [],
@@ -566,8 +693,9 @@ def split_text_blocks_into_semantic_chunks(
             "paragraph_index": 1,
             "semantic_type": semantic_bucket_for_text(chunk),
         }
-        for index, chunk in enumerate(split_text_into_chunks(fallback_text, max_chars=max_chars, overlap_words=0), start=1)
+        for index, chunk in enumerate(split_text_into_chunks(fallback_text, max_chars=max_chars, overlap_words=50), start=1)
     ]
+    return merge_short_chunks(fallback_chunks, min_chars=150)
 
 
 def clean_table_rows(rows: Sequence[Sequence[Any]]) -> List[List[str]]:
