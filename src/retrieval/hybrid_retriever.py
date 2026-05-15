@@ -10,6 +10,7 @@ import time
 import unicodedata
 from dataclasses import dataclass
 from pathlib import Path
+from collections import defaultdict, Counter
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 import numpy as np
@@ -51,15 +52,15 @@ class RetrievalConfig:
     index_dir: Path = DEFAULT_INDEX_DIR
     embed_model: str = DEFAULT_EMBED_MODEL
     cache_folder: Optional[Path] = DEFAULT_CACHE_DIR
-    bm25_top_n: int = 20
-    dense_top_m: int = 20
+    bm25_top_n: int = 30
+    dense_top_m: int = 60
     final_top_k: int = 10
-    rrf_k: int = 40
-    bm25_weight: float = 1.0
+    rrf_k: int = 60
+    bm25_weight: float = 2.0
     dense_weight: float = 5.0
     rerank_model: Optional[str] = None
-    rerank_top_k: int = 15
-    rerank_batch_size: int = 8
+    rerank_top_k: int = 20
+    rerank_batch_size: int = 16
     rerank_max_length: int = 384
     local_files_only: bool = False
     device: Optional[str] = None
@@ -128,6 +129,15 @@ class RaptorRetriever:
         self.nodes = list(read_jsonl(self.index_dir / "nodes.jsonl"))
         self.node_by_id = {node["node_id"]: node for node in self.nodes}
         self.node_ids = [node["node_id"] for node in self.nodes]
+        self.parent_map = defaultdict(list)
+        for node in self.nodes:
+            for child_id in node.get("child_node_ids") or []:
+                self.parent_map[child_id].append(node["node_id"])
+
+        self.depth_by_id = {
+            node["node_id"]: int(node.get("depth", 0))
+            for node in self.nodes
+        }
         self.bm25 = BM25Index.load(self.index_dir / "bm25.pkl")
         self.faiss_index = self._load_faiss(self.index_dir / "faiss.index")
         self.embedder = self._load_embedder(config.embed_model)
@@ -197,12 +207,26 @@ class RaptorRetriever:
     def modality_weight(self, query: str, node_id: str) -> float:
         node = self.node_by_id[node_id]
         chunk_type = str(node.get("chunk_type") or "").lower()
+        layer = str(node.get("layer") or "").lower()
+        depth = int(node.get("depth", 0))
         metadata = node.get("metadata") or {}
         child_types = {str(value).lower() for value in metadata.get("child_chunk_types") or []}
         is_visual = chunk_type == "visual" or child_types == {"visual"}
+
+        weight = 1.0
+
         if is_visual and not query_mentions_visual(query):
-            return 0.35
-        return 1.0
+            weight *= 0.35
+
+        # Boost nhẹ cho summary nodes để RAPTOR hiện rõ hơn
+        # if layer == "summary":
+        #     weight *= 1.18
+
+        # Summary ở tầng cao hơn được boost nhẹ thêm
+        if depth == 1 and layer == "summary":
+            weight *= 1.8
+
+        return weight
 
     def apply_modality_priority(
         self,
@@ -215,6 +239,7 @@ class RaptorRetriever:
         for item in candidates:
             updated = dict(item)
             weight = self.modality_weight(query, updated["node_id"])
+            weight *= self.structural_weight(query, updated["node_id"])
             base_score = float(updated.get(base_field) or updated.get("score") or 0.0)
             if base_field == "rerank_score" and updated.get(base_field) is not None:
                 adjusted_score = base_score + math.log(max(weight, 1e-6))
@@ -225,6 +250,28 @@ class RaptorRetriever:
             adjusted.append(updated)
         return sorted(adjusted, key=lambda item: item["modality_adjusted_score"], reverse=True)
 
+    def structural_weight(self, query: str, node_id: str) -> float:
+        node = self.node_by_id[node_id]
+        layer = str(node.get("layer") or "").lower()
+        q = normalize_text(query)
+
+        weight = 1.0
+
+        # Query thiên về symptom thì summary/symptom-like nodes đáng được ưu tiên hơn
+        if "triệu chứng" in q or "trieu chung" in q:
+            if layer == "summary":
+                weight *= 1.12
+
+        if "chẩn đoán" in q or "chan doan" in q:
+            if layer == "summary":
+                weight *= 1.10
+
+        if "cận lâm sàng" in q or "cls" in q:
+            if layer == "summary":
+                weight *= 1.08
+
+        return weight
+    
     def hybrid_collapsed_search(
         self,
         query: str,
@@ -246,6 +293,7 @@ class RaptorRetriever:
             candidates = reranked + candidates[self.config.rerank_top_k :]
 
         return [self.format_result(item) for item in candidates[: final_top_k or self.config.final_top_k]]
+
 
     def weighted_rrf(
         self,
@@ -294,6 +342,46 @@ class RaptorRetriever:
             reranked.append(updated)
         return sorted(reranked, key=lambda item: item["rerank_score"], reverse=True)
 
+    def expand_with_ancestors(
+        self,
+        query: str,
+        candidates: Sequence[Dict[str, Any]],
+        *,
+        max_hops: int = 2,
+        max_extra: int = 12,
+        ancestor_decay: float = 0.92,
+    ) -> List[Dict[str, Any]]:
+        expanded: List[Dict[str, Any]] = []
+        seen: set[str] = set()
+
+        for item in candidates:
+            base_item = dict(item)
+            expanded.append(base_item)
+            seen.add(base_item["node_id"])
+
+            frontier = [base_item["node_id"]]
+            for hop in range(max_hops):
+                next_frontier: List[str] = []
+                for nid in frontier:
+                    for pid in self.parent_map.get(nid, []):
+                        if pid in seen:
+                            continue
+                        parent_item = {
+                            "node_id": pid,
+                            "score": float(base_item.get("score", 0.0)) * (ancestor_decay ** (hop + 1)),
+                            "source_node_id": base_item["node_id"],
+                            "ancestor_hop": hop + 1,
+                        }
+                        expanded.append(parent_item)
+                        seen.add(pid)
+                        next_frontier.append(pid)
+
+                        if len(expanded) >= len(candidates) + max_extra:
+                            return self.apply_modality_priority(query, expanded)
+                frontier = next_frontier
+
+        return self.apply_modality_priority(query, expanded)
+    
     def dense_collapsed_search(
         self,
         query: str,
@@ -371,6 +459,10 @@ def print_results(results: Iterable[Dict[str, Any]]) -> None:
             score_bits.append(f"rerank={rerank_score:.4f}")
         print(f"\n#{rank} {item['node_id']} [{item.get('layer')} depth={item.get('depth')}] {' '.join(score_bits)}")
         print(f"source={doc} pages={pages}")
+        if item.get("layer"):
+            score_bits.append(f"layer={item.get('layer')}")
+        if item.get("chunk_type"):
+            score_bits.append(f"chunk_type={item.get('chunk_type')}")
         print(item["snippet"])
 
 
@@ -385,16 +477,16 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--embed-model", default=DEFAULT_EMBED_MODEL)
     parser.add_argument("--cache-folder", type=Path, default=DEFAULT_CACHE_DIR)
-    parser.add_argument("--bm25-top-n", type=int, default=20)
-    parser.add_argument("--dense-top-m", type=int, default=20)
+    parser.add_argument("--bm25-top-n", type=int, default=30)
+    parser.add_argument("--dense-top-m", type=int, default=60)
     parser.add_argument("--top-k", type=int, default=10)
-    parser.add_argument("--rrf-k", type=int, default=40)
-    parser.add_argument("--bm25-weight", type=float, default=1.0)
+    parser.add_argument("--rrf-k", type=int, default=60)
+    parser.add_argument("--bm25-weight", type=float, default=2.0)
     parser.add_argument("--dense-weight", type=float, default=5.0)
     parser.add_argument("--rerank-preset", choices=sorted(RERANK_PRESETS.keys()), default=None)
     parser.add_argument("--rerank-model", default=None)
-    parser.add_argument("--rerank-top-k", type=int, default=15)
-    parser.add_argument("--rerank-batch-size", type=int, default=8)
+    parser.add_argument("--rerank-top-k", type=int, default=20)
+    parser.add_argument("--rerank-batch-size", type=int, default=16)
     parser.add_argument("--rerank-max-length", type=int, default=384)
     parser.add_argument("--no-rerank", action="store_true")
     parser.add_argument("--local-files-only", action="store_true")
@@ -402,6 +494,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--show-timing", action="store_true", help="Print startup and query latency.")
     parser.add_argument("--token-limit", type=int, default=2000)
     parser.add_argument("--device", default=None)
+    parser.add_argument("--debug-layers", action="store_true")
     parser.add_argument("--json", action="store_true", help="Print JSON instead of readable text.")
     return parser.parse_args()
 

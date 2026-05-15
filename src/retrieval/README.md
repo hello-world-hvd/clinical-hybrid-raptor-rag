@@ -58,12 +58,12 @@ For CPU-only machines, prefer the fast reranker preset instead of the 2.27GB qua
 
 ```powershell
 .\venv\Scripts\python.exe -m src.retrieval.hybrid_retriever `
-  "triệu chứng ngộ độc thuốc chuột Fluoroacetat" `
+  "Trong ngộ độc khí CO, liệu pháp oxy cao áp được chỉ định cho những đối tượng nào dựa trên nồng độ HbCO?" `
   --index data\processed\raptor_index `
   --rerank-preset fast `
-  --rerank-top-k 8 `
+  --rerank-top-k 20 `
   --rerank-batch-size 16 `
-  --rerank-max-length 256
+  --rerank-max-length 384
 ```
 
 Useful presets:
@@ -96,7 +96,12 @@ The indexer repairs common PDF mojibake before tokenization/embedding, keeps all
 nodes in both indexes, and writes citation metadata from each node into
 `data/processed/raptor_index/nodes.jsonl`.
 
-python -m src.test_demo `  "triệu chứng ngộ độc thuốc chuột Fluoroacetat"`
---index data\processed\raptor_index `  --rerank-preset fast`
---rerank-top-k 8 `  --rerank-batch-size 16`
---rerank-max-length 256
+```powershell
+python -m src.test_demo `
+  "Trong ngộ độc khí CO, liệu pháp oxy cao áp được chỉ định cho những đối tượng nào dựa trên nồng độ HbCO?" `
+  --index data\processed\raptor_index `
+  --rerank-preset fast `
+  --rerank-top-k 20 `
+  --rerank-batch-size 16 `
+  --rerank-max-length 384
+```
