@@ -25,7 +25,7 @@
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│                     CLINICAL HYBRID RAPTOR RAG                  │
+│                     CLINICAL RAG                  │
 ├─────────────┬───────────────────────┬───────────────────────────┤
 │  DATA LAYER │   INDEXING LAYER      │   RETRIEVAL & GEN LAYER   │
 │             │                       │                           │
