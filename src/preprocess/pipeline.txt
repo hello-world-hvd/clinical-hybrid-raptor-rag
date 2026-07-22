@@ -1,29 +1,66 @@
-Pipeline preprocess hien nam o `src/preprocess/pipeline.py`.
+Contextual chunking pipeline
 
-Chay thu voi file dang test:
+Entry point:
 
 ```powershell
-.\venv\Scripts\python.exe src\preprocess\pipeline.py --input data\raw\Ngo-doc.pdf
+.\venv\Scripts\python.exe -m src.preprocess.pipeline `
+  --input data\raw `
+  --output data\processed\preprocess_output `
+  --context-batch-size 20 `
+  --openrouter-min-interval 3 `
+  --openrouter-max-requests 40
 ```
 
-Output chinh:
+Required environment variable:
 
-- `data/processed/preprocess_output/<ten-tai-lieu>/chunks.jsonl`
-- `data/processed/preprocess_output/<ten-tai-lieu>/manifest.json`
-- `data/processed/preprocess_output/<ten-tai-lieu>/markdown_pages/page_XXX.md`
-- `data/processed/preprocess_output/<ten-tai-lieu>/tables/page_XXX_table_YY.csv`
-- `data/processed/preprocess_output/<ten-tai-lieu>/assets/page_XXX_table_YY.png`
-- `data/processed/preprocess_output/<ten-tai-lieu>/assets/page_XXX_visual_YY.png`
+```text
+OPENROUTER_API_KEY=...
+OPENROUTER_MIN_INTERVAL_SECONDS=3
+OPENROUTER_MAX_REQUESTS_PER_RUN=40
+```
 
-Luong xu ly:
+Rate-limit protection:
 
-1. Parse PDF theo tung trang bang PyMuPDF/pdfplumber.
-2. Trich text theo block de giu vi tri, font, thu tu doc.
-3. Sua mojibake/loi font pho bien khi UTF-8 bi doc nham cp1252/latin1.
-4. Chuan hoa Unicode va ky hieu y khoa/khoa hoc nhu micro, <=, >=, +/-, m^2, H2O.
-5. Trich bang bang pdfplumber, luu markdown/CSV/JSON rows/bbox/anh vung bang.
-6. Phat hien vung anh/so do/vector drawing, luu bbox va anh crop de phuc hoi khi retrieve.
-7. Loai text nam trong bbox bang khoi luong text chinh de bang thanh chunk rieng.
-8. Chunk text theo heading/muc/tieu muc truoc, sau do tach tung doan hoac bullet trong moi muc.
-9. Gan `semantic_type` cho leaf chunk: symptoms, diagnosis, tests, treatment, complications, hoac general.
-10. Ghi JSONL streaming tung chunk, khong giu toan bo tai lieu trong RAM.
+- Up to 20 uncached chunks are sent in one contextualization request.
+- Pending chunks are batched across page boundaries; only the final partial
+  batch contains fewer than 20 chunks.
+- Requests from chat and rerank clients share one in-process limiter.
+- The default pacing is one request every 3 seconds.
+- At most 40 HTTP attempts are allowed per Python run by default.
+- HTTP 429, 408, and transient 5xx responses use exponential backoff with
+  jitter and honor the `Retry-After` response header.
+- Contextual preprocessing switches to deterministic page/heading context when
+  the request budget is exhausted or OpenRouter remains unavailable.
+- Existing OpenRouter responses are cached and do not consume another request.
+
+Set `--openrouter-max-requests 0` for no per-run cap. This is not recommended
+for free API accounts. Use `--strict-context` to stop instead of falling back.
+
+Progress bars show:
+
+- PDF files completed.
+- Pages completed in the current PDF.
+- Contextual chunks completed on the current page.
+- API attempts, pending chunks, cache hits, and fallback contexts.
+
+Use `--no-progress` in non-interactive jobs.
+
+The pipeline has one text chunking flow:
+
+1. Extract and normalize PDF text blocks.
+2. Keep heading and paragraph structure when splitting oversized text.
+3. Send each text chunk with its page context to
+   `google/gemma-4-31b-it:free` through OpenRouter.
+4. Prefix the generated context sentence to the original chunk.
+5. Cache contextualization responses under
+   `data/cache/contextual_chunking/openrouter_contexts.json`.
+6. Write text, table, and visual chunks to
+   `data/processed/preprocess_output/<document>/chunks.jsonl`.
+
+Main modules:
+
+- `pipeline.py`: command-line interface.
+- `document.py`: PDF processing and output writing.
+- `contextual_chunking.py`: Gemma contextualization and cache.
+- `text.py`: structural splitting used by contextual chunking.
+- `tables.py`, `visuals.py`, `geometry.py`: non-text extraction helpers.

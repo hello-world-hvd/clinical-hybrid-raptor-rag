@@ -6,28 +6,29 @@ import json
 import math
 import os
 import re
+import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
 import numpy as np
-import pandas as pd
 from ftfy import fix_text
-from sentence_transformers import SentenceTransformer
-from sklearn.decomposition import PCA
-from sklearn.mixture import GaussianMixture
 from tqdm import tqdm
-import umap
+
+try:
+    from ..openrouter_client import DEFAULT_OPENROUTER_MODEL, OpenRouterClient
+except ImportError:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    from openrouter_client import DEFAULT_OPENROUTER_MODEL, OpenRouterClient
 
 
 DEFAULT_INPUT = Path("data/processed/preprocess_output")
 DEFAULT_OUTPUT = Path("data/processed/raptor_tree")
 DEFAULT_EMBED_MODEL = "BAAI/bge-m3"
-MODAL_APP_NAME = "raptor-qwen25-summarizer"
-MODAL_FUNCTION_NAME = "summarize_batch"
+MODAL_APP_NAME = "raptor-bge-m3-embedder"
 MODAL_EMBED_FUNCTION_NAME = "embed_batch"
-_LOCAL_EMBEDDERS: Dict[Tuple[str, str], SentenceTransformer] = {}
+_LOCAL_EMBEDDERS: Dict[Tuple[str, str], Any] = {}
 
 
 @dataclass
@@ -45,8 +46,8 @@ class BuildConfig:
     max_cluster_tokens: int = 9000
     soft_threshold: float = 0.30
     max_memberships: int = 1
-    summary_backend: str = "modal"
-    modal_batch_size: int = 8
+    summary_model: str = DEFAULT_OPENROUTER_MODEL
+    summary_timeout: float = 120.0
     modal_embed_batch_size: int = 96
     max_summary_tokens: int = 384
     random_state: int = 42
@@ -186,6 +187,8 @@ def _torch_cuda_available() -> bool:
 
 
 def local_embed_texts(model_name: str, texts: Sequence[str], batch_size: int) -> np.ndarray:
+    from sentence_transformers import SentenceTransformer
+
     device = "cuda" if _torch_cuda_available() else "cpu"
     print(f"Embedding {len(texts)} texts locally with {model_name} on {device}")
     key = (model_name, device)
@@ -262,6 +265,8 @@ def load_or_create_level_embeddings(
 
 
 def reduce_embeddings(embeddings: np.ndarray, config: BuildConfig) -> np.ndarray:
+    from sklearn.decomposition import PCA
+
     n_samples = len(embeddings)
     if n_samples <= 2:
         return embeddings
@@ -272,6 +277,8 @@ def reduce_embeddings(embeddings: np.ndarray, config: BuildConfig) -> np.ndarray
 
     n_neighbors = min(config.umap_neighbors, max(2, n_samples - 1))
     n_components = min(config.umap_components, max(2, n_samples - 1))
+    import umap
+
     reducer = umap.UMAP(
         n_neighbors=n_neighbors,
         n_components=n_components,
@@ -283,6 +290,8 @@ def reduce_embeddings(embeddings: np.ndarray, config: BuildConfig) -> np.ndarray
 
 
 def choose_gmm_k(X: np.ndarray, config: BuildConfig) -> Tuple[int, List[Dict[str, float]]]:
+    from sklearn.mixture import GaussianMixture
+
     n_samples = len(X)
     if n_samples < config.min_cluster_size:
         return 1, []
@@ -317,6 +326,8 @@ def gmm_soft_clusters(
     embeddings: np.ndarray,
     config: BuildConfig,
 ) -> Tuple[List[List[int]], int, List[Dict[str, float]]]:
+    from sklearn.mixture import GaussianMixture
+
     if len(nodes) <= config.min_cluster_size:
         return [list(range(len(nodes)))], 1, []
 
@@ -407,55 +418,48 @@ def split_large_clusters(
     return final
 
 
-def sentence_split(text: str) -> List[str]:
-    pieces = re.split(r"(?<=[.!?])\s+|\n+", text.strip())
-    return [piece.strip() for piece in pieces if piece.strip()]
+def build_summary_prompt(texts: Sequence[str], max_input_chars: int) -> str:
+    parts: List[str] = []
+    used_chars = 0
+    for index, text in enumerate(texts, start=1):
+        remaining = max_input_chars - used_chars
+        if remaining <= 0:
+            break
+        clipped = str(text).strip()[:remaining]
+        if clipped:
+            parts.append(f"[{index}] {clipped}")
+            used_chars += len(clipped)
 
-
-def local_extractive_summary(texts: Sequence[str], max_sentences: int = 8, max_chars: int = 1800) -> str:
-    joined = "\n".join(texts)
-    sentences = sentence_split(joined)
-    if not sentences:
-        return joined[:max_chars]
-
-    words = re.findall(r"[\wÀ-Ỵà-ỵĐđ]+", joined.lower())
-    stop = {"và", "là", "của", "có", "các", "trong", "cho", "với", "được", "theo", "khi"}
-    freq: Dict[str, int] = {}
-    for word in words:
-        if len(word) <= 2 or word in stop:
-            continue
-        freq[word] = freq.get(word, 0) + 1
-
-    scored = []
-    for idx, sent in enumerate(sentences):
-        sent_words = re.findall(r"[\wÀ-Ỵà-ỵĐđ]+", sent.lower())
-        score = sum(freq.get(word, 0) for word in sent_words)
-        scored.append((score, idx, sent))
-
-    top = sorted(scored, reverse=True)[:max_sentences]
-    top = sorted(top, key=lambda item: item[1])
-    return " ".join(item[2] for item in top)[:max_chars]
-
-
-def modal_summarize_batch(clusters: List[List[str]], config: BuildConfig) -> List[str]:
-    import modal
-
-    fn = modal.Function.from_name(MODAL_APP_NAME, MODAL_FUNCTION_NAME)
-    batches = [
-        clusters[start : start + config.modal_batch_size]
-        for start in range(0, len(clusters), config.modal_batch_size)
-    ]
-    summaries: List[str] = []
-    mapped = fn.map(
-        batches,
-        kwargs={
-            "max_new_tokens": config.max_summary_tokens,
-            "max_input_chars": max(6000, config.max_cluster_tokens * 5),
-        },
-        order_outputs=True,
+    return (
+        "Hãy tóm tắt cụm đoạn văn y khoa dưới đây bằng tiếng Việt có dấu. "
+        "Giữ lại bệnh/can thiệp, triệu chứng, tiêu chí chẩn đoán, xét nghiệm, "
+        "ngưỡng giá trị, xử trí và cảnh báo quan trọng. Không thêm thông tin "
+        "ngoài nguồn. Trả về một đoạn tóm tắt ngắn gọn, không dùng lời dẫn.\n\n"
+        + "\n\n".join(parts)
     )
-    for batch_result in tqdm(mapped, total=len(batches), desc="Modal summary batches"):
-        summaries.extend(batch_result)
+
+
+def openrouter_summarize_clusters(
+    clusters: Sequence[Sequence[str]],
+    config: BuildConfig,
+) -> List[str]:
+    client = OpenRouterClient(
+        model=config.summary_model,
+        timeout=config.summary_timeout,
+    )
+    max_input_chars = max(6000, config.max_cluster_tokens * 5)
+    summaries: List[str] = []
+    for texts in tqdm(clusters, desc="OpenRouter summaries"):
+        summaries.append(
+            client.complete(
+                system_prompt=(
+                    "Bạn là trợ lý tóm tắt tài liệu y khoa. Chỉ sử dụng thông tin "
+                    "trong các đoạn nguồn và ưu tiên độ chính xác."
+                ),
+                user_prompt=build_summary_prompt(texts, max_input_chars),
+                max_tokens=config.max_summary_tokens,
+            )
+        )
     return summaries
 
 
@@ -463,7 +467,7 @@ def summary_cache_key(child_ids: Sequence[str], texts: Sequence[str], config: Bu
     payload = {
         "child_ids": list(child_ids),
         "text_hash": hashlib.sha1("\n".join(texts).encode("utf-8")).hexdigest(),
-        "backend": config.summary_backend,
+        "summary_model": config.summary_model,
         "max_summary_tokens": config.max_summary_tokens,
         "max_cluster_tokens": config.max_cluster_tokens,
     }
@@ -504,14 +508,8 @@ def summarize_clusters(
     cluster_texts: List[List[str]],
     config: BuildConfig,
 ) -> Tuple[List[str], str]:
-    if config.summary_backend == "modal":
-        try:
-            return modal_summarize_batch(cluster_texts, config), "modal"
-        except Exception as exc:
-            print(f"Modal summarization failed, falling back to local extractive summaries: {exc}")
-
-    summaries = [local_extractive_summary(texts) for texts in tqdm(cluster_texts, desc="Local summaries")]
-    return summaries, "extractive"
+    summaries = openrouter_summarize_clusters(cluster_texts, config)
+    return summaries, f"openrouter:{config.summary_model}"
 
 
 def summarize_clusters_cached(
@@ -768,8 +766,8 @@ def build_tree(config: BuildConfig) -> Dict[str, Any]:
             "max_cluster_tokens": config.max_cluster_tokens,
             "soft_threshold": config.soft_threshold,
             "max_memberships": config.max_memberships,
-            "summary_backend_requested": config.summary_backend,
-            "modal_batch_size": config.modal_batch_size,
+            "summary_model": config.summary_model,
+            "summary_timeout": config.summary_timeout,
             "modal_embed_batch_size": config.modal_embed_batch_size,
         },
         "stats": {
@@ -805,8 +803,8 @@ def parse_args() -> BuildConfig:
     parser.add_argument("--max-cluster-tokens", type=int, default=9000)
     parser.add_argument("--soft-threshold", type=float, default=0.30)
     parser.add_argument("--max-memberships", type=int, default=1)
-    parser.add_argument("--summary-backend", choices=["modal", "extractive"], default="modal")
-    parser.add_argument("--modal-batch-size", type=int, default=8)
+    parser.add_argument("--summary-model", default=DEFAULT_OPENROUTER_MODEL)
+    parser.add_argument("--summary-timeout", type=float, default=120.0)
     parser.add_argument("--modal-embed-batch-size", type=int, default=96)
     parser.add_argument("--max-summary-tokens", type=int, default=384)
     parser.add_argument("--random-state", type=int, default=42)
@@ -826,8 +824,8 @@ def parse_args() -> BuildConfig:
         max_cluster_tokens=args.max_cluster_tokens,
         soft_threshold=args.soft_threshold,
         max_memberships=args.max_memberships,
-        summary_backend=args.summary_backend,
-        modal_batch_size=args.modal_batch_size,
+        summary_model=args.summary_model,
+        summary_timeout=args.summary_timeout,
         modal_embed_batch_size=args.modal_embed_batch_size,
         max_summary_tokens=args.max_summary_tokens,
         random_state=args.random_state,
