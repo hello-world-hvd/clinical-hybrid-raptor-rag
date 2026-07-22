@@ -53,76 +53,10 @@
 
 ---
 
-## 📁 Cấu trúc thư mục
-
-```
-project/
-├── data/
-│   ├── raw/                    # Dữ liệu gốc (PDF, DOCX hướng dẫn lâm sàng)
-│   ├── processed/
-│   │   ├── preprocess_output/  # Chunks sau tiền xử lý
-│   │   ├── raptor_tree/        # Cây RAPTOR (JSONL)
-│   │   ├── graph_rag/          # Đồ thị thực thể y khoa
-│   │   └── qdrant_index/       # Manifest Qdrant
-│   └── cache/
-│       ├── embeddings/         # Cache embedding vectors
-│       └── query_optimization/ # Cache tối ưu truy vấn
-│
-├── src/
-│   ├── crawldata/              # Thu thập dữ liệu
-│   ├── preprocess/             # Tiền xử lý tài liệu
-│   │   ├── document.py         # Xử lý PDF/DOCX
-│   │   ├── text.py             # Chunking văn bản
-│   │   ├── tables.py           # Trích xuất bảng
-│   │   ├── contextual_chunking.py  # Chunking có ngữ cảnh
-│   │   └── normalization.py    # Chuẩn hóa văn bản
-│   │
-│   ├── embedding/              # Module embedding
-│   │   ├── dense.py            # Dense embedder (BGE-M3)
-│   │   ├── sparse.py           # Sparse BM25 embedder
-│   │   └── late_interaction.py # ColBERT embedder
-│   │
-│   ├── raptor/                 # Xây dựng cây RAPTOR
-│   │   └── build_raptor_tree.py
-│   │
-│   ├── graph_rag/              # Graph RAG
-│   │   ├── entity_extractor.py # Trích xuất thực thể y khoa
-│   │   ├── graph_builder.py    # Xây dựng đồ thị
-│   │   ├── graph_indexer.py    # Index đồ thị
-│   │   ├── graph_retriever.py  # Truy xuất từ đồ thị
-│   │   └── community_summarizer.py
-│   │
-│   ├── retrieval/              # Module truy xuất
-│   │   ├── ensemble_retriever.py  # Ensemble retriever chính
-│   │   ├── hybrid_retriever.py    # Hybrid BM25+Dense
-│   │   ├── query_optimizer.py     # HyDE, Multi-query, Step-back
-│   │   ├── qdrant_indexer.py      # Index vào Qdrant
-│   │   └── index_raptor.py        # Index cây RAPTOR
-│   │
-│   ├── vectorstore/            # Wrapper Qdrant
-│   │   └── qdrant_store.py
-│   │
-│   ├── generation/             # Sinh câu trả lời
-│   │   └── llm_answer.py       # Qwen2.5 generator
-│   │
-│   ├── evaluation/             # Đánh giá hệ thống
-│   │   └── ragas_testset_generator.py
-│   │
-│   └── openrouter_client.py    # Client OpenRouter API
-│
-├── tests/                      # Unit tests
-├── notebooks/                  # Jupyter notebooks
-├── frontend/                   # Giao diện người dùng
-├── docker-compose.yml          # Docker cho Qdrant
-├── requirements.txt
-└── .env                        # API keys
-```
-
----
-
 ## ⚙️ Cài đặt
 
 ### Yêu cầu hệ thống
+
 - Python 3.10+
 - CUDA (khuyến nghị, hoặc chạy trên CPU)
 - Docker (cho Qdrant)
@@ -236,6 +170,7 @@ results = retriever.retrieve("Xử trí ngộ độc Paracetamol như thế nào
 ### Query Optimizer
 
 Tối ưu câu truy vấn thông qua 4 kỹ thuật:
+
 - **HyDE (Hypothetical Document Embeddings)**: Sinh tài liệu giả định để tăng recall
 - **Multi-Query**: Tạo 3 cách diễn đạt khác nhau của cùng câu hỏi
 - **Sub-questions**: Phân rã câu hỏi phức tạp thành câu hỏi con
@@ -292,6 +227,7 @@ python -m src.evaluation.ragas_testset_generator \
 ```
 
 ### Metrics đánh giá
+
 - **Answer Faithfulness**: Độ trung thực của câu trả lời với ngữ cảnh
 - **Answer Relevancy**: Độ liên quan câu trả lời với câu hỏi
 - **Context Precision**: Độ chính xác ngữ cảnh được truy xuất
@@ -301,25 +237,25 @@ python -m src.evaluation.ragas_testset_generator \
 
 ## 🛠️ Công nghệ sử dụng
 
-| Thành phần | Công nghệ |
-|-----------|-----------|
-| Embedding | BAAI/bge-m3, ColBERT |
-| Vector DB | Qdrant |
-| BM25 | Qdrant FastEmbed |
-| LLM | Qwen2.5-3B-Instruct, Nvidia Nemotron Ultra |
-| LLM API | OpenRouter |
-| Reranker | Nvidia LLaMA Nemotron Rerank |
-| Graph | NetworkX |
-| Evaluation | RAGAS |
-| Framework | FastAPI, LangChain-core |
+| Thành phần | Công nghệ                                  |
+| ---------- | ------------------------------------------ |
+| Embedding  | BAAI/bge-m3, ColBERT                       |
+| Vector DB  | Qdrant                                     |
+| BM25       | Qdrant FastEmbed                           |
+| LLM        | Qwen2.5-3B-Instruct, Nvidia Nemotron Ultra |
+| LLM API    | OpenRouter                                 |
+| Reranker   | Nvidia LLaMA Nemotron Rerank               |
+| Graph      | NetworkX                                   |
+| Evaluation | RAGAS                                      |
+| Framework  | FastAPI, LangChain-core                    |
 
 ---
 
 ## 👥 Nhóm phát triển
 
-| Họ tên | MSSV | Vai trò |
-|--------|------|---------|
-| *(Nhóm sinh viên PTIT)* | | |
+| Họ tên                  | MSSV | Vai trò |
+| ----------------------- | ---- | ------- |
+| _(Nhóm sinh viên PTIT)_ |      |         |
 
 ---
 
