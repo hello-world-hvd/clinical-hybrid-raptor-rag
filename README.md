@@ -1,18 +1,17 @@
-# 🏥 Clinical Hybrid RAPTOR RAG
+# 🏥 Clinical RAG
 
 > **Hệ thống Truy xuất và Sinh câu trả lời thông minh cho Tài liệu Y khoa Lâm sàng**  
 > Học viện Công nghệ Bưu chính Viễn thông (PTIT) — Môn Truy xuất Thông tin, Năm 4 Kỳ 2
 
 [![Python](https://img.shields.io/badge/Python-3.10%2B-blue?logo=python)](https://python.org)
 [![Qdrant](https://img.shields.io/badge/VectorDB-Qdrant-red?logo=qdrant)](https://qdrant.tech)
-[![License](https://img.shields.io/badge/License-MIT-green)](LICENSE)
 [![RAGAS](https://img.shields.io/badge/Eval-RAGAS-orange)](https://docs.ragas.io)
 
 ---
 
 ## 📖 Giới thiệu
 
-**Clinical Hybrid RAPTOR RAG** là hệ thống RAG (Retrieval-Augmented Generation) lai ghép nhiều kỹ thuật tiên tiến, được thiết kế chuyên biệt cho bài toán trả lời câu hỏi y khoa lâm sàng tiếng Việt. Hệ thống tích hợp:
+**Clinical RAG** là hệ thống RAG (Retrieval-Augmented Generation) lai ghép nhiều kỹ thuật tiên tiến, được thiết kế chuyên biệt cho bài toán trả lời câu hỏi y khoa lâm sàng tiếng Việt. Hệ thống tích hợp:
 
 - **RAPTOR** (Recursive Abstractive Processing for Tree-Organized Retrieval): Xây dựng cây phân cấp tóm tắt tài liệu
 - **Graph RAG**: Trích xuất thực thể y khoa và xây dựng đồ thị tri thức
